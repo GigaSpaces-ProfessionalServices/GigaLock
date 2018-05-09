@@ -41,7 +41,9 @@ public class GSLockManager {
 
         try {
             space.write(new GSLockEntry(key), tr, Lease.FOREVER, waitingForLockTime, Modifiers.UPDATE_OR_WRITE);
-            locksCache.put(key, new LockInfo(tr, lockTimeToLive));
+            synchronized (key) {
+                locksCache.put(key, new LockInfo(tr, lockTimeToLive));
+            }
             return true;
         } catch (SpaceTimeoutException e) {
             try {
@@ -61,12 +63,15 @@ public class GSLockManager {
     }
 
     public void unlock(Serializable key) {
-        LockInfo lockInfo = locksCache.get(key);
+        final LockInfo lockInfo = locksCache.get(key);
 
         if (lockInfo != null) {
             try {
                 lockInfo.tx.abort();
-                locksCache.remove(key);
+                synchronized (key) {
+                    if (locksCache.get(key) == lockInfo)
+                        locksCache.remove(key);
+                }
             } catch (Exception e) {
                 throw new GSLockException("Failed to release lock for entry " + key, e);
             }
