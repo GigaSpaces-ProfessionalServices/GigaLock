@@ -1,18 +1,12 @@
 package com.avaya.workflow.impl.edp.lock;
 
-import org.openspaces.core.GigaMap;
-import org.openspaces.core.GigaMapConfigurer;
-import org.openspaces.core.map.LockHandle;
-import org.openspaces.core.map.MapConfigurer;
 import org.openspaces.core.space.SpaceProxyConfigurer;
-import org.springframework.transaction.TransactionDefinition;
 
 import com.avaya.collaboration.datagrid.api.user.UserInfo;
 import com.avaya.collaboration.datagrid.api.util.DCMUtil;
 import com.avaya.workflow.lock.LockProvider;
 import com.avaya.workflow.logger.Logger;
 import com.avaya.workflow.logger.LoggerFactory;
-import com.j_spaces.map.IMap;
 
 public class GSLockProvider implements LockProvider {
 	private static GSLockProvider gslockProvider = null;
@@ -21,8 +15,7 @@ public class GSLockProvider implements LockProvider {
 	private static final long DEFAULT_WAITING_FOR_LOCK_TIME = 11000; // 11s
 	private static Logger logger = LoggerFactory.getLogger(GSLockProvider.class);
 	private static final ClassLoader gsCl = GSLockProvider.class.getClassLoader();
-	private static IMap map = null;
-	private static GigaMap gigaMap = null;
+	private static GSLockManager lockManager;
 	private static SpaceProxyConfigurer spaceProxyConfigurer = null;
 
 	public static final GSLockProvider getInstance() {
@@ -54,20 +47,12 @@ public class GSLockProvider implements LockProvider {
 		if (lookupLocators != null && lookupLocators.length() > 0) {
 			spaceProxyConfigurer.lookupLocators(lookupLocators);
 		}
-		map = new MapConfigurer(spaceProxyConfigurer.space()).createMap();
-
-		// By default the lock time to live is DEFAULT_LOCK_TIME_TO_LIVE
-		// milliseconds and waiting for lock timeout is
-		// DEFAULT_WAITING_FOR_LOCK_TIME milliseconds.
-		gigaMap = new GigaMapConfigurer(map).defaultLockTimeToLive(DEFAULT_LOCK_TIME_TO_LIVE)
-				.defaultWaitingForLockTimeout(DEFAULT_WAITING_FOR_LOCK_TIME)
-				.defaultIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ).gigaMap();
-
+		lockManager = new GSLockManager(spaceProxyConfigurer);
 	}
 
 	@Override
 	public boolean tryLock(String instanceId) {
-		LockHandle lockHandle = null;
+		boolean result = false;
 		ClassLoader tcl = null;
 
 		try {
@@ -75,7 +60,7 @@ public class GSLockProvider implements LockProvider {
 			Thread.currentThread().setContextClassLoader(gsCl);
 			// lockTimeToLive is DEFAULT_LOCK_TIME_TO_LIVE milliseconds;
 			// The waitingForLockTimeout is 0 second.
-			lockHandle = gigaMap.lock(instanceId, DEFAULT_LOCK_TIME_TO_LIVE, 0);
+			result = lockManager.lock(instanceId, DEFAULT_LOCK_TIME_TO_LIVE, 0);
 		} catch (Exception e) {
 			// Cannot lock the key.
 			logger.error("tryLock exception: ", e);
@@ -85,7 +70,7 @@ public class GSLockProvider implements LockProvider {
 			}
 		}
 
-		if (null == lockHandle) {
+		if (result == false) {
 			if (logger.isFineEnabled()) {
 				logger.fine("tryLock did not acquire the GSLock on instance: " + instanceId + " thread: "
 						+ Thread.currentThread().getId());
@@ -103,7 +88,7 @@ public class GSLockProvider implements LockProvider {
 
 	@Override
 	public void acquireLock(String instanceId) {
-		LockHandle lockHandle = null;
+		boolean result = false;
 		ClassLoader tcl = null;
 
 		if (logger.isFineEnabled()) {
@@ -117,7 +102,7 @@ public class GSLockProvider implements LockProvider {
 			// Use DEFAULT_LOCK_TIME_TO_LIVE and DEFAULT_WAITING_FOR_LOCK_TIME
 			// explicitly even though they were set as default when creating the
 			// GigaMap.
-			lockHandle = gigaMap.lock(instanceId, DEFAULT_LOCK_TIME_TO_LIVE, DEFAULT_WAITING_FOR_LOCK_TIME);
+			result = lockManager.lock(instanceId, DEFAULT_LOCK_TIME_TO_LIVE, DEFAULT_WAITING_FOR_LOCK_TIME);
 		} catch (Exception e) {
 			// Cannot lock the key.
 			logger.error("acquireLock exception: ", e);
@@ -127,7 +112,7 @@ public class GSLockProvider implements LockProvider {
 			}
 		}
 
-		if (null == lockHandle) {
+		if (result == false) {
 			logger.error("Failed to acquire GSLock on instance: " + instanceId + " thread: "
 					+ Thread.currentThread().getId());
 		} else {
@@ -146,7 +131,7 @@ public class GSLockProvider implements LockProvider {
 		try {
 			tcl = Thread.currentThread().getContextClassLoader();
 			Thread.currentThread().setContextClassLoader(gsCl);
-			gigaMap.unlock(instanceId);
+			lockManager.unlock(instanceId);
 		} catch (Exception e) {
 			// Cannot release the key.
 			logger.error("releaseLock exception: ", e);
@@ -165,27 +150,7 @@ public class GSLockProvider implements LockProvider {
 
 	@Override
 	public void deleteLock(String instanceId) {
-		ClassLoader tcl = null;
-
-		try {
-			tcl = Thread.currentThread().getContextClassLoader();
-			Thread.currentThread().setContextClassLoader(gsCl);
-			// Just in case it was locked.
-			gigaMap.unlock(instanceId);
-		} catch (Exception e) {
-			// Cannot unlock the key.
-			logger.error("deleteLock exception: ", e);
-		} finally {
-			gigaMap.remove(instanceId);
-			if (tcl != null) {
-				Thread.currentThread().setContextClassLoader(tcl);
-			}
-		}
-
-		if (logger.isFineEnabled()) {
-			logger.fine("Deleted GSLock on instance: " + instanceId);
-		}
-
+		releaseLock(instanceId);
 	}
 
 	public boolean isLocked(String instanceId) {
@@ -194,7 +159,7 @@ public class GSLockProvider implements LockProvider {
 		try {
 			tcl = Thread.currentThread().getContextClassLoader();
 			Thread.currentThread().setContextClassLoader(gsCl);
-			result = gigaMap.isLocked(instanceId);
+			result = lockManager.isLocked(instanceId);
 		} catch (Exception e) {
 			// Cannot check the lock.
 			logger.error("isLocked exception: ", e);
