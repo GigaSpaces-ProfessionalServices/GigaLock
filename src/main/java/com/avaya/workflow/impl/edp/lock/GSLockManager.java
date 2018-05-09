@@ -3,6 +3,7 @@ package com.avaya.workflow.impl.edp.lock;
 import com.gigaspaces.client.transaction.DistributedTransactionManagerProvider;
 import com.j_spaces.core.IJSpace;
 import com.j_spaces.core.client.Modifiers;
+import com.j_spaces.core.client.OperationTimeoutException;
 import net.jini.core.lease.Lease;
 import net.jini.core.transaction.Transaction;
 import net.jini.core.transaction.TransactionException;
@@ -44,8 +45,9 @@ public class GSLockManager {
             synchronized (key) {
                 locksCache.put(key, new LockInfo(tr, lockTimeToLive));
             }
+            System.out.println("acquired lock for " + key);
             return true;
-        } catch (SpaceTimeoutException e) {
+        } catch (OperationTimeoutException e) {
             try {
                 tr.abort();
             } catch (Exception re) {
